@@ -1,1001 +1,625 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Package, AlertTriangle, TrendingUp, ClipboardCheck, LogOut, Plus, Edit2, Trash2, Search, X, Save, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import Swal from 'sweetalert2'; // IMPORT SWEETALERT
 
-// --- SUPABASE CLIENT HELPER CLASS ---
-class SupabaseClient {
-  constructor(url, key) {
-    this.url = 'https://fdmfdjiinxbkqobvlxcj.supabase.co';
-    this.key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkbWZkamlpbnhia3FvYnZseGNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1MTY4MDMsImV4cCI6MjA4MDA5MjgwM30.1EJLRYRazj3btIdsboO53N98esLnyMc-vG6yUvjXK54';
-    this.authListeners = [];
-  }
-
-  async request(endpoint, options = {}) {
-    const headers = {
-      'apikey': this.key,
-      'Content-Type': 'application/json',
-      ...options.headers
-    };
-
-    const token = localStorage.getItem('supabase_token');
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${this.url}${endpoint}`, {
-      ...options,
-      headers
-    });
-
-    const data = await response.json();
-    return { data: response.ok ? data : null, error: response.ok ? null : data };
-  }
-
-  auth = {
-    signInWithPassword: async ({ email, password }) => {
-      const { data, error } = await this.request('/auth/v1/token?grant_type=password', {
-        method: 'POST',
-        body: JSON.stringify({ email, password })
-      });
-
-      if (data?.access_token) {
-        localStorage.setItem('supabase_token', data.access_token);
-        localStorage.setItem('supabase_user', JSON.stringify(data.user));
-        this.notifyAuthChange(data);
-      }
-
-      return { data, error };
-    },
-
-    signUp: async ({ email, password, options = {} }) => {
-      const { data, error } = await this.request('/auth/v1/signup', {
-        method: 'POST',
-        body: JSON.stringify({ 
-          email, 
-          password,
-          data: options.data 
-        })
-      });
-
-      return { data, error };
-    },
-
-    signOut: async () => {
-      localStorage.removeItem('supabase_token');
-      localStorage.removeItem('supabase_user');
-      this.notifyAuthChange(null);
-      return { error: null };
-    },
-
-    getSession: async () => {
-      const token = localStorage.getItem('supabase_token');
-      const user = localStorage.getItem('supabase_user');
-      
-      if (token && user) {
-        return { 
-          data: { 
-            session: { 
-              access_token: token, 
-              user: JSON.parse(user) 
-            } 
-          } 
-        };
-      }
-      return { data: { session: null } };
-    },
-
-    onAuthStateChange: (callback) => {
-      this.authListeners.push(callback);
-      return {
-        data: {
-          subscription: {
-            unsubscribe: () => {
-              this.authListeners = this.authListeners.filter(cb => cb !== callback);
-            }
-          }
-        }
-      };
-    },
-
-    notifyAuthChange(session) {
-      this.authListeners.forEach(callback => callback('SIGNED_IN', session));
-    }
-  };
-
-  from(table) {
-    return new QueryBuilder(this, table);
-  }
-}
-
-class QueryBuilder {
-  constructor(client, table) {
-    this.client = client;
-    this.table = table;
-    this.selectQuery = '*';
-    this.filters = [];
-    this.orderQuery = null;
-    this.limitQuery = null;
-    this.singleQuery = false;
-  }
-
-  select(columns = '*') {
-    this.selectQuery = columns;
-    return this;
-  }
-
-  eq(column, value) {
-    this.filters.push(`${column}=eq.${value}`);
-    return this;
-  }
-
-  order(column, options = {}) {
-    this.orderQuery = `${column}.${options.ascending ? 'asc' : 'desc'}`;
-    return this;
-  }
-
-  limit(count) {
-    this.limitQuery = count;
-    return this;
-  }
-
-  single() {
-    this.singleQuery = true;
-    return this;
-  }
-
-  async insert(data) {
-    const endpoint = `/rest/v1/${this.table}`;
-    const result = await this.client.request(endpoint, {
-      method: 'POST',
-      headers: { 'Prefer': 'return=representation' },
-      body: JSON.stringify(Array.isArray(data) ? data : [data])
-    });
-
-    if (result.data && Array.isArray(result.data) && result.data.length === 1) {
-      return { ...result, data: result.data[0] };
-    }
-    return result;
-  }
-
-  async update(data) {
-    const filterString = this.filters.length > 0 ? `?${this.filters.join('&')}` : '';
-    const endpoint = `/rest/v1/${this.table}${filterString}`;
+// --- CSS KHUSUS BIAR HASIL PRINT RAPI & UI CANTIK ---
+const printStyles = `
+  @media print {
+    .no-print { display: none !important; }
+    body { background: white; -webkit-print-color-adjust: exact; }
+    .print-container { width: 100%; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { border: 1px solid #000; padding: 5px; }
+    th { background-color: #eee !important; color: black; }
     
-    return await this.client.request(endpoint, {
-      method: 'PATCH',
-      headers: { 'Prefer': 'return=representation' },
-      body: JSON.stringify(data)
-    });
-  }
-
-  async delete() {
-    const filterString = this.filters.length > 0 ? `?${this.filters.join('&')}` : '';
-    const endpoint = `/rest/v1/${this.table}${filterString}`;
+    /* HANYA TAMPILKAN BARIS YANG DICEKLIS */
+    tr.not-selected { display: none !important; }
     
-    return await this.client.request(endpoint, {
-      method: 'DELETE'
-    });
+    /* Sembunyikan kolom checkbox saat print */
+    .col-checkbox { display: none !important; }
+    
+    .print-header { display: block !important; text-align: center; margin-bottom: 20px; }
   }
 
-  async then(resolve, reject) {
-    try {
-      let query = `?select=${this.selectQuery}`;
-      if (this.filters.length > 0) query += `&${this.filters.join('&')}`;
-      if (this.orderQuery) query += `&order=${this.orderQuery}`;
-      if (this.limitQuery) query += `&limit=${this.limitQuery}`;
-
-      const endpoint = `/rest/v1/${this.table}${query}`;
-      const result = await this.client.request(endpoint);
-
-      if (this.singleQuery && result.data && Array.isArray(result.data)) {
-        result.data = result.data[0] || null;
-      }
-      resolve(result);
-    } catch (error) {
-      reject(error);
-    }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
-}
 
-// Inisialisasi Supabase
-const supabase = new SupabaseClient(
-  'https://fdmfdjiinxbkqobvlxcj.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkbWZkamlpbnhia3FvYnZseGNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1MTY4MDMsImV4cCI6MjA4MDA5MjgwM30.1EJLRYRazj3btIdsboO53N98esLnyMc-vG6yUvjXK54'
-);
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
 
-// --- MAIN APP COMPONENT ---
-export default function InventoryApp() {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [currentUser, setCurrentUser] = useState(null);
+  .filter-input {
+    transition: all 0.3s ease;
+  }
+
+  .filter-input:focus {
+    border-color: #007bff !important;
+    box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+    outline: none;
+  }
+
+  .btn-hover {
+    transition: all 0.3s ease;
+  }
+
+  .btn-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+  }
+
+  .suggestion-item {
+    transition: background 0.2s ease;
+  }
+
+  .suggestion-item:hover {
+    background: #f8f9fa !important;
+  }
+
+  .table-row {
+    transition: background 0.2s ease;
+  }
+
+  .table-row:hover {
+    background: #f8f9fa !important;
+  }
+
+  /* Styles untuk Pagination */
+  .pagination-btn {
+    padding: 8px 12px;
+    margin: 0 4px;
+    border: 1px solid #ddd;
+    background: white;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: all 0.2s;
+  }
+  .pagination-btn:hover:not(:disabled) {
+    background: #f0f0f0;
+    border-color: #ccc;
+  }
+  .pagination-btn.active {
+    background: #007bff;
+    color: white;
+    border-color: #007bff;
+  }
+  .pagination-btn:disabled {
+    color: #ccc;
+    cursor: not-allowed;
+    background: #f9f9f9;
+  }
+`;
+
+// --- HALAMAN LOGIN ---
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [usersData, setUsersData] = useState([]);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchCurrentUser(session.user.email);
-      setLoading(false);
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) fetchCurrentUser(session.user.email);
-    });
-
-    return () => subscription.unsubscribe();
+    fetch('/data/users.json')
+      .then(res => res.json())
+      .then(data => setUsersData(data))
+      .catch(err => console.error("Gagal ambil data user:", err));
   }, []);
 
-  const fetchCurrentUser = async (email) => {
-    const { data } = await supabase
-      .from('users')
-      .select('*, roles(nama), locations(nama)')
-      .eq('email', email)
-      .single();
-    setCurrentUser(data);
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
-        <div className="text-white text-xl animate-pulse">Loading Inventory System...</div>
-      </div>
-    );
-  }
-
-  if (!session) return <AuthPage />;
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 pb-10">
-      <Header user={currentUser} onLogout={() => supabase.auth.signOut()} />
-      <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === 'dashboard' && <Dashboard />}
-        {activeTab === 'products' && <ProductsPage />}
-        {activeTab === 'categories' && <CategoriesPage />}
-        {activeTab === 'opname' && <StockOpnamePage currentUser={currentUser} />}
-      </main>
-    </div>
-  );
-}
-
-// --- SUB COMPONENTS ---
-
-function AuthPage() {
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [nama, setNama] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleAuth = async (e) => {
+  const handleLogin = (e) => {
     e.preventDefault();
-    setError('');
     setLoading(true);
-
-    try {
-      if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { nama } }
+    
+    setTimeout(() => {
+      const foundUser = usersData.find(u => 
+        u.username.toLowerCase() === username.toLowerCase() && 
+        u.password === password
+      );
+      if (foundUser) {
+        // SweetAlert: Toast Sukses
+        const Toast = Swal.mixin({
+            toast: true, position: 'top-end', showConfirmButton: false, timer: 3000, timerProgressBar: true
         });
-        if (error) throw error;
-        alert('Check your email for verification link!');
+        Toast.fire({ icon: 'success', title: `Selamat datang, ${foundUser.name}!` });
+
+        onLogin({ name: foundUser.name, role: foundUser.role });
+      } else {
+        // SweetAlert: Error
+        Swal.fire({
+            icon: 'error',
+            title: 'Login Gagal',
+            text: 'Username atau Password salah!',
+            confirmButtonColor: '#d33'
+        });
       }
-    } catch (error) {
-      setError(error.message || 'Authentication failed');
-    } finally {
       setLoading(false);
-    }
+    }, 500);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
-        <div className="flex items-center justify-center mb-8">
-          <Package className="w-12 h-12 text-blue-600 mr-3" />
-          <h1 className="text-3xl font-bold text-gray-800">Inventory System</h1>
-        </div>
-        
-        <form onSubmit={handleAuth} className="space-y-4">
-          {!isLogin && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nama Lengkap</label>
-              <input type="text" value={nama} onChange={(e) => setNama(e.target.value)} className="w-full px-4 py-2 border rounded-lg" required={!isLogin} />
-            </div>
-          )}
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2 border rounded-lg" required />
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#f0f2f5' }}>
+      <div style={{ background: 'white', padding: '40px', borderRadius: '10px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', width: '100%', maxWidth: '400px' }}>
+        <h2 style={{ textAlign: 'center', color: '#333', marginBottom: '20px' }}>🔐 Login HNS System</h2>
+        <form onSubmit={handleLogin}>
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ fontWeight: 'bold', color: '#555' }}>Username</label>
+            <input 
+              type="text" 
+              value={username} 
+              onChange={(e) => setUsername(e.target.value)} 
+              style={{ width: '100%', padding: '10px', marginTop: '5px', border: '1px solid #ccc', borderRadius: '5px' }} 
+              disabled={loading}
+            />
           </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2 border rounded-lg" required minLength={6} />
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ fontWeight: 'bold', color: '#555' }}>Password</label>
+            <input 
+              type="password" 
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+              style={{ width: '100%', padding: '10px', marginTop: '5px', border: '1px solid #ccc', borderRadius: '5px' }} 
+              disabled={loading}
+            />
           </div>
-
-          {error && <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
-
-          <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50">
-            {loading ? 'Processing...' : (isLogin ? 'Login' : 'Sign Up')}
+          <button 
+            type="submit" 
+            disabled={loading}
+            style={{ 
+              width: '100%', padding: '12px', background: loading ? '#6c757d' : '#007bff', color: 'white', border: 'none', borderRadius: '5px', fontWeight: 'bold', cursor: loading ? 'not-allowed' : 'pointer', transition: 'all 0.3s'
+            }}
+          >
+            {loading ? 'Memproses...' : 'MASUK'}
           </button>
         </form>
-
-        <div className="mt-6 text-center">
-          <button onClick={() => setIsLogin(!isLogin)} className="text-blue-600 hover:text-blue-700 text-sm font-medium">
-            {isLogin ? "Don't have an account? Sign Up" : 'Already have an account? Login'}
-          </button>
-        </div>
       </div>
     </div>
   );
 }
 
-function Header({ user, onLogout }) {
+// --- LOADING SKELETON COMPONENT ---
+function LoadingSkeleton() {
   return (
-    <header className="bg-slate-800 border-b border-slate-700 shadow-lg">
-      <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-        <div className="flex items-center">
-          <Package className="w-8 h-8 text-blue-400 mr-3" />
-          <div>
-            <h1 className="text-2xl font-bold text-white">Inventory System</h1>
-            <p className="text-sm text-gray-400">Real-time Stock Management</p>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-4">
-          <div className="text-right">
-            <p className="text-white font-medium">{user?.nama || 'User'}</p>
-            <p className="text-sm text-gray-400">{user?.roles?.nama || 'Staff'} • {user?.locations?.nama || 'N/A'}</p>
-          </div>
-          <button onClick={onLogout} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition">
-            <LogOut className="w-4 h-4" /> Logout
-          </button>
-        </div>
-      </div>
-    </header>
+    <div style={{ background: 'white', padding: '10px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>
+      {[1,2,3,4,5,6,7,8].map(i => (
+        <div key={i} style={{ height: '50px', background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite', marginBottom: '10px', borderRadius: '5px' }} />
+      ))}
+    </div>
   );
 }
 
-function Navigation({ activeTab, setActiveTab }) {
-  const tabs = [
-    { id: 'dashboard', label: 'Dashboard', icon: TrendingUp },
-    { id: 'products', label: 'Produk', icon: Package },
-    { id: 'categories', label: 'Kategori', icon: Package },
-    { id: 'opname', label: 'Stock Opname', icon: ClipboardCheck },
-  ];
+// --- HALAMAN UTAMA ---
+function App() {
+  const [user, setUser] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  // Data Hasil Filter
+  const [filteredProducts, setFilteredProducts] = useState([]);
+  
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20; // Jumlah barang per halaman
 
-  return (
-    <nav className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-      <div className="max-w-7xl mx-auto px-4">
-        <div className="flex gap-1 overflow-x-auto">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-6 py-3 font-medium transition whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? 'bg-slate-700 text-white border-b-2 border-blue-500'
-                    : 'text-gray-400 hover:text-white hover:bg-slate-700/50'
-                }`}
-              >
-                <Icon className="w-4 h-4" /> {tab.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </nav>
-  );
-}
+  // Opsi Dropdown
+  const [categories, setCategories] = useState([]);
+  const [brands, setBrands] = useState([]);
 
-function Dashboard() {
-  const [stats, setStats] = useState({ total: 0, lowStock: 0, categories: 0 });
-  const [stockData, setStockData] = useState([]);
-  const [lowStockItems, setLowStockItems] = useState([]);
+  // State Filter
+  const [search, setSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedBrand, setSelectedBrand] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState("Semua");
+
+  // State untuk autocomplete
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
+  const [showBrandSuggestions, setShowBrandSuggestions] = useState(false);
+
+  // State Checkbox
+  const [checkedItems, setCheckedItems] = useState({});
+
+  // State untuk Sync
+  const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
-    fetchDashboardData();
+    const savedUser = localStorage.getItem('hns_user');
+    if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
-  const fetchDashboardData = async () => {
-    const { data: products } = await supabase
-      .from('products')
-      .select('*, product_categories(nama), stock_live(quantity)')
-      .eq('is_active', true);
+  useEffect(() => {
+    if (user) {
+      setLoading(true);
+      setTimeout(() => {
+        fetch('/data/products.json')
+          .then(res => res.json())
+          .then(data => {
+            setProducts(data);
+            const uniqueCats = [...new Set(data.map(item => item.kategori).filter(Boolean))].sort();
+            const uniqueBrands = [...new Set(data.map(item => item.brand).filter(Boolean))].sort();
+            setCategories(uniqueCats);
+            setBrands(uniqueBrands);
+            setLoading(false);
+          })
+          .catch(err => {
+            console.error("Gagal ambil data:", err);
+            setLoading(false);
+          });
+      }, 800);
+    }
+  }, [user]);
 
-    const { data: categories } = await supabase
-      .from('product_categories')
-      .select('*')
-      .eq('is_active', true);
+  useEffect(() => {
+    let result = products;
+    
+    // Filter kategori
+    if (selectedCategory.trim()) {
+      result = result.filter(item => item.kategori.toLowerCase().includes(selectedCategory.toLowerCase()));
+    }
+    
+    // Filter brand
+    if (selectedBrand.trim()) {
+      result = result.filter(item => item.brand.toLowerCase().includes(selectedBrand.toLowerCase()));
+    }
+    
+    // Filter status
+    if (selectedStatus === "Ready") result = result.filter(item => item.stok > 0);
+    else if (selectedStatus === "Kosong") result = result.filter(item => item.stok <= 0);
+    
+    // Filter search
+    if (search.trim()) {
+      const lowerSearch = search.toLowerCase();
+      result = result.filter(item => 
+        item.nama.toLowerCase().includes(lowerSearch) ||
+        item.id.toLowerCase().includes(lowerSearch)
+      );
+    }
+    
+    setFilteredProducts(result);
+    setCurrentPage(1); // Reset ke halaman 1 jika filter berubah
+  }, [products, search, selectedCategory, selectedBrand, selectedStatus]);
 
-    const lowStock = products?.filter(p => {
-      const qty = p.stock_live?.[0]?.quantity || 0;
-      return qty < p.min_stock;
-    }) || [];
+  // --- LOGIC PAGINATION ---
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentItems = filteredProducts.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage);
 
-    setStats({
-      total: products?.length || 0,
-      lowStock: lowStock.length,
-      categories: categories?.length || 0
-    });
-
-    const categoryStats = categories?.map(cat => ({
-      name: cat.nama,
-      value: products?.filter(p => p.category_id === cat.id).length || 0
-    })) || [];
-    setStockData(categoryStats);
-
-    setLowStockItems(lowStock.slice(0, 5));
+  const handlePageChange = (pageNumber) => {
+    setCurrentPage(pageNumber);
+    window.scrollTo({ top: 0, behavior: 'smooth' }); // Scroll ke atas saat pindah halaman
   };
 
-  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  const handleCheck = (id) => {
+    setCheckedItems(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleSelectAll = () => {
+    // Pilih hanya item yang ada di halaman ini (biar performa aman)
+    const currentIds = currentItems.map(p => p.id);
+    const isAllChecked = currentIds.every(id => checkedItems[id]);
+    const newCheckedState = { ...checkedItems };
+    currentIds.forEach(id => { newCheckedState[id] = !isAllChecked; });
+    setCheckedItems(newCheckedState);
+  };
+
+  const handleLogout = () => {
+    // SweetAlert Konfirmasi Logout
+    Swal.fire({
+        title: 'Yakin mau keluar?',
+        text: "Anda harus login kembali untuk masuk.",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#6c757d',
+        cancelButtonColor: '#d33',
+        confirmButtonText: 'Ya, Keluar',
+        cancelButtonText: 'Batal'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            setUser(null);
+            localStorage.removeItem('hns_user');
+            const Toast = Swal.mixin({
+                toast: true, position: 'top', showConfirmButton: false, timer: 2000
+            });
+            Toast.fire({ icon: 'success', title: 'Berhasil Logout' });
+        }
+    });
+  };
+
+  const formatRupiah = (angka) => {
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+  };
+
+  const handlePrint = () => {
+    const countSelected = Object.values(checkedItems).filter(Boolean).length;
+    if (countSelected === 0) {
+      // SweetAlert Warning
+      Swal.fire({
+        icon: 'warning',
+        title: 'Oops...',
+        text: 'Pilih minimal 1 barang (ceklis) dulu sebelum mencetak!',
+        confirmButtonColor: '#007bff'
+      });
+      return;
+    }
+    window.print();
+  };
+
+  const handleExport = () => {
+    let csvContent = "data:text/csv;charset=utf-8,KODE,NAMA BARANG,BRAND,KATEGORI,HARGA DEALER,STOK,LAST UPDATE\n";
+    filteredProducts.forEach(item => {
+      const row = [
+        item.id,
+        `"${item.nama.replace(/"/g, '""')}"`,
+        item.brand,
+        item.kategori,
+        item.harga_jual,
+        item.stok,
+        item.last_update
+      ].join(",");
+      csvContent += row + "\n";
+    });
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `hns_stok_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Toast Success Export
+    const Toast = Swal.mixin({
+        toast: true, position: 'bottom-end', showConfirmButton: false, timer: 3000
+    });
+    Toast.fire({ icon: 'success', title: 'Excel berhasil didownload!' });
+  };
+
+  const clearAllFilters = () => {
+    setSearch("");
+    setSelectedCategory("");
+    setSelectedBrand("");
+    setSelectedStatus("Semua");
+  };
+
+  const handleSync = async () => {
+    // 1. SweetAlert Konfirmasi
+    const result = await Swal.fire({
+        title: 'Update Data?',
+        text: "Sistem akan menarik data terbaru dari Google Sheets.",
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#ffc107',
+        cancelButtonColor: '#d33',
+        confirmButtonText: 'Ya, Update!',
+        cancelButtonText: 'Batal'
+    });
+
+    if (!result.isConfirmed) return;
+    
+    setIsSyncing(true);
+    
+    // 2. SweetAlert Loading
+    Swal.fire({
+        title: 'Sedang Update...',
+        html: 'Mohon tunggu sebentar.',
+        allowOutsideClick: false,
+        didOpen: () => { Swal.showLoading() }
+    });
+
+    try {
+      const res = await fetch('/api/sync');
+      const data = await res.json();
+      
+      if (data.success) {
+        // 3. SweetAlert Sukses
+        await Swal.fire({
+            icon: 'success',
+            title: 'Berhasil!',
+            text: `${data.total} data barang berhasil diperbarui.`,
+            confirmButtonColor: '#28a745'
+        });
+        window.location.reload();
+      } else {
+        Swal.fire({ icon: 'error', title: 'Gagal', text: data.message });
+      }
+    } catch (err) {
+      console.error("Error sync:", err);
+      Swal.fire({
+        icon: 'error',
+        title: 'Error Koneksi',
+        text: 'Pastikan server backend (node server.js) berjalan.'
+      });
+    }
+    setIsSyncing(false);
+  };
+
+  if (!user) return <LoginPage onLogin={(u) => { setUser(u); localStorage.setItem('hns_user', JSON.stringify(u)); }} />;
+  
+  const countSelected = Object.values(checkedItems).filter(Boolean).length;
+  const categorySuggestions = categories.filter(cat => cat.toLowerCase().includes(selectedCategory.toLowerCase())).slice(0, 5);
+  const brandSuggestions = brands.filter(brand => brand.toLowerCase().includes(selectedBrand.toLowerCase())).slice(0, 5);
+  const hasActiveFilters = search || selectedCategory || selectedBrand || selectedStatus !== "Semua";
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard icon={Package} label="Total Produk" value={stats.total} color="blue" />
-        <StatCard icon={AlertTriangle} label="Low Stock Alert" value={stats.lowStock} color="red" />
-        <StatCard icon={Package} label="Kategori" value={stats.categories} color="green" />
-      </div>
+    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif', backgroundColor: '#f4f4f9', minHeight: '100vh' }}>
+      <style>{printStyles}</style>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">Produk per Kategori</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={stockData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, value }) => `${name}: ${value}`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {stockData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+      {/* HEADER WEB */}
+      <div className="no-print" style={{ marginBottom: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', padding: '15px 20px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' }}>
+          <div>
+            <h2 style={{ margin: 0, color: '#333' }}>📦 HNS Gudang</h2>
+            <span style={{ fontSize: '14px', color: '#666' }}>
+              User: <b>{user.name}</b> <span style={{ background: user.role === 'admin' ? '#d9534f' : '#28a745', color: 'white', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', marginLeft: '5px' }}>{user.role.toUpperCase()}</span>
+            </span>
+          </div>
+          <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+             {user.role === 'admin' && (
+               <button onClick={handleSync} disabled={isSyncing} className="btn-hover" style={{ background: isSyncing ? '#e0a800' : '#ffc107', color: '#333', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: isSyncing ? 'wait' : 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                 {isSyncing ? <><span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⏳</span> Updating...</> : <>🔄 Update Data</>}
+               </button>
+             )}
+             <div style={{padding: '8px 15px', background: '#e2e6ea', borderRadius: '5px', fontSize: '14px'}}>
+               Total: <b style={{ color: '#007bff' }}>{filteredProducts.length}</b> 
+             </div>
+             <button onClick={handleLogout} className="btn-hover" style={{ background: '#6c757d', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>Keluar</button>
+          </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">Low Stock Alert (Top 5)</h3>
-          <div className="space-y-3">
-            {lowStockItems.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">Semua stok aman! 🎉</p>
-            ) : (
-              lowStockItems.map((item) => {
-                const qty = item.stock_live?.[0]?.quantity || 0;
-                return (
-                  <div key={item.id} className="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-200">
-                    <div>
-                      <p className="font-medium text-gray-800">{item.nama}</p>
-                      <p className="text-sm text-gray-600">{item.product_categories?.nama}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-red-600 font-bold">{qty} pcs</p>
-                      <p className="text-xs text-gray-500">Min: {item.min_stock}</p>
-                    </div>
-                  </div>
-                );
-              })
+        {/* FILTER BAR */}
+        <div style={{ marginTop: '20px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+            <h3 style={{ margin: 0, color: '#555', fontSize: '16px' }}>🔍 Filter & Pencarian</h3>
+            {hasActiveFilters && (
+              <button onClick={clearAllFilters} style={{ background: '#ffc107', color: '#333', border: 'none', padding: '6px 12px', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>✖ Clear All</button>
             )}
           </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'end' }}>
+            {/* Input Filters... (Sama seperti sebelumnya) */}
+            <div style={{ flex: 1, minWidth: '200px' }}>
+              <label style={{fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px'}}>Pencarian Umum</label>
+              <div style={{ position: 'relative' }}>
+                <input type="text" placeholder="🔍 Cari nama / kode..." className="filter-input" style={{ width: '100%', padding: '10px 35px 10px 10px', borderRadius: '5px', border: '1px solid #ddd' }} value={search} onChange={(e) => setSearch(e.target.value)} />
+                {search && <button onClick={() => setSearch("")} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#999' }}>×</button>}
+              </div>
+            </div>
+            
+            <div style={{ minWidth: '180px', position: 'relative' }}>
+               <label style={{fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px'}}>Kategori</label>
+               <input type="text" placeholder="Ketik kategori..." className="filter-input" value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setShowCategorySuggestions(true); }} onFocus={() => setShowCategorySuggestions(true)} onBlur={() => setTimeout(() => setShowCategorySuggestions(false), 200)} style={{ width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }} />
+               {showCategorySuggestions && categorySuggestions.length > 0 && (
+                 <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #ddd', borderRadius: '5px', zIndex: 1000 }}>
+                   {categorySuggestions.map((cat, idx) => <div key={idx} className="suggestion-item" onClick={() => { setSelectedCategory(cat); setShowCategorySuggestions(false); }} style={{ padding: '10px', cursor: 'pointer' }}>{cat}</div>)}
+                 </div>
+               )}
+            </div>
+
+            <div style={{ minWidth: '180px', position: 'relative' }}>
+               <label style={{fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px'}}>Brand</label>
+               <input type="text" placeholder="Ketik brand..." className="filter-input" value={selectedBrand} onChange={(e) => { setSelectedBrand(e.target.value); setShowBrandSuggestions(true); }} onFocus={() => setShowBrandSuggestions(true)} onBlur={() => setTimeout(() => setShowBrandSuggestions(false), 200)} style={{ width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }} />
+               {showBrandSuggestions && brandSuggestions.length > 0 && (
+                 <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #ddd', borderRadius: '5px', zIndex: 1000 }}>
+                   {brandSuggestions.map((brand, idx) => <div key={idx} className="suggestion-item" onClick={() => { setSelectedBrand(brand); setShowBrandSuggestions(false); }} style={{ padding: '10px', cursor: 'pointer' }}>{brand}</div>)}
+                 </div>
+               )}
+            </div>
+
+            <div style={{ minWidth: '140px' }}>
+               <label style={{fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px'}}>Status Stok</label>
+               <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)} className="filter-input" style={{ width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ddd', cursor: 'pointer', background: 'white' }}>
+                <option value="Semua">📋 Semua</option><option value="Ready">✅ Ready</option><option value="Kosong">❌ Kosong</option>
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', paddingBottom: '1px' }}>
+              <button onClick={handlePrint} className="btn-hover" style={{ background: countSelected > 0 ? '#17a2b8' : '#6c757d', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '5px', cursor: countSelected > 0 ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '14px' }}>🖨️ Cetak ({countSelected})</button>
+              <button onClick={handleExport} className="btn-hover" style={{ background: '#28a745', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' }}>📥 Excel</button>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-function StatCard({ icon: Icon, label, value, color }) {
-  const colors = { blue: 'bg-blue-500', red: 'bg-red-500', green: 'bg-green-500' };
-  return (
-    <div className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-gray-600 text-sm mb-1">{label}</p>
-          <p className="text-3xl font-bold text-gray-800">{value}</p>
-        </div>
-        <div className={`${colors[color]} p-4 rounded-xl`}>
-          <Icon className="w-8 h-8 text-white" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ProductsPage() {
-  const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [locations, setLocations] = useState([]);
-  const [showModal, setShowModal] = useState(false);
-  const [editingProduct, setEditingProduct] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [formData, setFormData] = useState({
-    code: '', barcode: '', nama: '', category_id: '',
-    harga_beli: '', harga_jual: '', harga_grosir: '',
-    unit: 'PCS', min_stock: 10, max_stock: 1000
-  });
-
-  useEffect(() => {
-    fetchProducts();
-    fetchCategories();
-    fetchLocations();
-  }, []);
-
-  const fetchProducts = async () => {
-    const { data } = await supabase
-      .from('products')
-      .select('*, product_categories(nama), stock_live(quantity, location_id, locations(nama))')
-      .eq('is_active', true)
-      .order('created_at', { ascending: false });
-    setProducts(data || []);
-  };
-
-  const fetchCategories = async () => {
-    const { data } = await supabase.from('product_categories').select('*').eq('is_active', true);
-    setCategories(data || []);
-  };
-
-  const fetchLocations = async () => {
-    const { data } = await supabase.from('locations').select('*').eq('is_active', true);
-    setLocations(data || []);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    const dataToSubmit = {
-      ...formData,
-      harga_beli: parseFloat(formData.harga_beli),
-      harga_jual: parseFloat(formData.harga_jual),
-      harga_grosir: parseFloat(formData.harga_grosir),
-      min_stock: parseInt(formData.min_stock),
-      max_stock: parseInt(formData.max_stock),
-    };
-
-    if (editingProduct) {
-      await supabase.from('products').update(dataToSubmit).eq('id', editingProduct.id);
-    } else {
-      const { data: newProduct } = await supabase.from('products').insert([dataToSubmit]).select().single();
-      if (newProduct && locations.length > 0) {
-        // Initialize stock 0 for all locations
-        const stockEntries = locations.map(loc => ({
-          product_id: newProduct.id,
-          location_id: loc.id,
-          quantity: 0
-        }));
-        await supabase.from('stock_live').insert(stockEntries);
-      }
-    }
-    setShowModal(false);
-    setEditingProduct(null);
-    resetForm();
-    fetchProducts();
-  };
-
-  const handleEdit = (product) => {
-    setEditingProduct(product);
-    setFormData({
-      code: product.code, barcode: product.barcode || '', nama: product.nama,
-      category_id: product.category_id, harga_beli: product.harga_beli,
-      harga_jual: product.harga_jual, harga_grosir: product.harga_grosir,
-      unit: product.unit, min_stock: product.min_stock, max_stock: product.max_stock
-    });
-    setShowModal(true);
-  };
-
-  const handleDelete = async (id) => {
-    if (window.confirm('Hapus produk ini? (Soft Delete)')) {
-      await supabase.from('products').update({ is_active: false }).eq('id', id);
-      fetchProducts();
-    }
-  };
-
-  const resetForm = () => {
-    setFormData({
-      code: '', barcode: '', nama: '', category_id: '',
-      harga_beli: '', harga_jual: '', harga_grosir: '',
-      unit: 'PCS', min_stock: 10, max_stock: 1000
-    });
-  };
-
-  const filteredProducts = products.filter(p =>
-    p.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.code.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-        <div className="relative flex-1 w-full max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-          <input
-            type="text"
-            placeholder="Cari produk (Nama / Kode)..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-        <button
-          onClick={() => { resetForm(); setShowModal(true); }}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 transition w-full md:w-auto justify-center"
-        >
-          <Plus className="w-5 h-5" /> Tambah Produk
-        </button>
+      {/* HEADER PRINT */}
+      <div className="print-header" style={{ display: 'none' }}>
+        <h2>LIST STOK HNS IT CENTER</h2>
+        <p style={{fontSize: '12px'}}>Tanggal: {new Date().toLocaleDateString('id-ID')}</p>
+        <hr/>
       </div>
 
-      <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kode</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama Produk</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kategori</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Hrg Jual</th>
-                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Stok</th>
-                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Aksi</th>
+      {/* TABEL DATA */}
+      {loading ? <LoadingSkeleton /> : (
+        <div style={{ overflowX: 'auto', background: 'white', padding: '10px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#007bff', color: 'white', textAlign: 'left' }}>
+                <th className="col-checkbox" style={{ padding: '12px', textAlign: 'center', width: '50px' }}>
+                  <input type="checkbox" onChange={handleSelectAll} style={{ transform: 'scale(1.3)', cursor: 'pointer' }} checked={currentItems.length > 0 && currentItems.every(p => checkedItems[p.id])} />
+                </th>
+                <th style={{ padding: '12px', fontSize: '13px' }}>KODE</th>
+                <th style={{ padding: '12px', fontSize: '13px' }}>NAMA BARANG</th>
+                <th style={{ padding: '12px', fontSize: '13px' }}>BRAND</th>
+                {user.role === 'admin' && <th className="no-print" style={{ padding: '12px', background: '#c82333', fontSize: '13px' }}>MODAL (CP)</th>}
+                <th style={{ padding: '12px', fontSize: '13px' }}>HARGA DEALER</th>
+                <th style={{ padding: '12px', textAlign: 'center', fontSize: '13px' }}>STOK</th>
+                <th style={{ padding: '12px', fontSize: '12px' }}>LAST UPDATE</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filteredProducts.map((product) => {
-                const totalStock = product.stock_live?.reduce((sum, sl) => sum + sl.quantity, 0) || 0;
-                const isLowStock = totalStock < product.min_stock;
-                
+            <tbody>
+              {/* NOTE: KITA LOOPING currentItems (Hasil Pagination) BUKAN filteredProducts */}
+              {currentItems.map((item, index) => {
+                const isChecked = !!checkedItems[item.id];
+                const rowClass = isChecked ? "selected" : "not-selected";
+                const bgRow = isChecked ? '#e8f0fe' : (index % 2 === 0 ? '#fafafa' : 'white');
                 return (
-                  <tr key={product.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{product.code}</td>
-                    <td className="px-6 py-4">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">{product.nama}</div>
-                        {product.barcode && <div className="text-xs text-gray-500">{product.barcode}</div>}
-                      </div>
+                  <tr key={index} className={`${rowClass} table-row`} style={{ borderBottom: '1px solid #eee', backgroundColor: bgRow }}>
+                    <td className="col-checkbox" style={{ padding: '12px', textAlign: 'center' }}>
+                      <input type="checkbox" checked={isChecked} onChange={() => handleCheck(item.id)} style={{ transform: 'scale(1.3)', cursor: 'pointer' }} />
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{product.product_categories?.nama}</td>
-                    <td className="px-6 py-4 text-sm text-right font-medium text-gray-900">
-                      Rp {product.harga_jual?.toLocaleString()}
+                    <td style={{ padding: '12px', fontWeight: 'bold', color: '#007bff', fontSize: '13px' }}>{item.id}</td>
+                    <td style={{ padding: '12px' }}>
+                      <div style={{ fontWeight: '500', color: '#333' }}>{item.nama}</div>
+                      <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>📁 {item.kategori}</div>
                     </td>
-                    <td className="px-6 py-4 text-center">
-                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                        isLowStock ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
-                      }`}>
-                        {totalStock} {product.unit}
-                      </span>
+                    <td style={{ padding: '12px', fontSize: '13px', color: '#555' }}>{item.brand}</td>
+                    {user.role === 'admin' && <td className="no-print" style={{ padding: '12px', color: '#d9534f', fontWeight: 'bold', fontSize: '13px' }}>{formatRupiah(item.harga_beli)}</td>}
+                    <td style={{ padding: '12px', color: '#28a745', fontWeight: 'bold', fontSize: '13px' }}>{formatRupiah(item.harga_jual)}</td>
+                    <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', backgroundColor: item.stok > 0 ? '#d4edda' : '#f8d7da', color: item.stok > 0 ? '#155724' : '#721c24', fontSize: '13px' }}>
+                      {user.role === 'admin' ? item.stok : (item.stok > 0 ? '✅ READY' : '❌ KOSONG')}
                     </td>
-                    <td className="px-6 py-4 text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <button onClick={() => handleEdit(product)} className="text-blue-600 hover:text-blue-800 p-1">
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => handleDelete(product.id)} className="text-red-600 hover:text-red-800 p-1">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+                    <td style={{ padding: '12px', fontSize: '11px', color: '#666' }}>{item.last_update}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </div>
-      </div>
 
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
-              <h2 className="text-xl font-bold text-gray-800">{editingProduct ? 'Edit Produk' : 'Tambah Produk Baru'}</h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-700">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Kode Barang</label>
-                  <input type="text" required value={formData.code} onChange={(e) => setFormData({...formData, code: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Barcode</label>
-                  <input type="text" value={formData.barcode} onChange={(e) => setFormData({...formData, barcode: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
+          {/* EMPTY STATE - KALO PENCARIAN GA KETEMU */}
+          {filteredProducts.length === 0 && (
+            <div style={{ padding: '40px', textAlign: 'center' }}>
+              <div style={{ fontSize: '48px', marginBottom: '10px' }}>📦</div>
+              <div style={{ color: '#888', fontSize: '16px' }}>
+                {hasActiveFilters ? 'Tidak ada barang yang sesuai dengan filter' : 'Tidak ada data barang'}
               </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nama Produk</label>
-                <input type="text" required value={formData.nama} onChange={(e) => setFormData({...formData, nama: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Kategori</label>
-                  <select value={formData.category_id} onChange={(e) => setFormData({...formData, category_id: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-                    <option value="">Pilih Kategori</option>
-                    {categories.map(c => <option key={c.id} value={c.id}>{c.nama}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Satuan</label>
-                  <input type="text" value={formData.unit} onChange={(e) => setFormData({...formData, unit: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Harga Beli</label>
-                  <input type="number" value={formData.harga_beli} onChange={(e) => setFormData({...formData, harga_beli: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Harga Jual</label>
-                  <input type="number" value={formData.harga_jual} onChange={(e) => setFormData({...formData, harga_jual: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Harga Grosir</label>
-                  <input type="number" value={formData.harga_grosir} onChange={(e) => setFormData({...formData, harga_grosir: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Min Stock Alert</label>
-                  <input type="number" value={formData.min_stock} onChange={(e) => setFormData({...formData, min_stock: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Max Stock</label>
-                  <input type="number" value={formData.max_stock} onChange={(e) => setFormData({...formData, max_stock: e.target.value})} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-4 border-t border-gray-200 mt-4">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">Batal</button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2">
-                  <Save className="w-4 h-4" /> Simpan Produk
+              {hasActiveFilters && (
+                <button 
+                  onClick={clearAllFilters} 
+                  style={{ marginTop: '15px', background: '#007bff', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}
+                >
+                  Reset Filter
                 </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CategoriesPage() {
-  const [categories, setCategories] = useState([]);
-  const [showModal, setShowModal] = useState(false);
-  const [editingCat, setEditingCat] = useState(null);
-  const [formData, setFormData] = useState({ code: '', nama: '', deskripsi: '' });
-
-  useEffect(() => {
-    fetchCategories();
-  }, []);
-
-  const fetchCategories = async () => {
-    const { data } = await supabase.from('product_categories').select('*').eq('is_active', true);
-    setCategories(data || []);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (editingCat) {
-      await supabase.from('product_categories').update(formData).eq('id', editingCat.id);
-    } else {
-      await supabase.from('product_categories').insert([formData]);
-    }
-    setShowModal(false);
-    setEditingCat(null);
-    setFormData({ code: '', nama: '', deskripsi: '' });
-    fetchCategories();
-  };
-
-  const handleDelete = async (id) => {
-    if (window.confirm('Hapus kategori ini?')) {
-      await supabase.from('product_categories').update({ is_active: false }).eq('id', id);
-      fetchCategories();
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-white">Daftar Kategori</h2>
-        <button
-          onClick={() => { setEditingCat(null); setFormData({code:'', nama:'', deskripsi:''}); setShowModal(true); }}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-        >
-          <Plus className="w-5 h-5" /> Tambah Kategori
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {categories.map((cat) => (
-          <div key={cat.id} className="bg-white p-6 rounded-xl shadow-lg relative group">
-            <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition">
-              <button onClick={() => { setEditingCat(cat); setFormData(cat); setShowModal(true); }} className="text-blue-600 hover:bg-blue-50 p-1 rounded">
-                <Edit2 className="w-4 h-4" />
-              </button>
-              <button onClick={() => handleDelete(cat.id)} className="text-red-600 hover:bg-red-50 p-1 rounded">
-                <Trash2 className="w-4 h-4" />
-              </button>
+              )}
             </div>
-            <h3 className="text-xl font-bold text-gray-800 mb-1">{cat.nama}</h3>
-            <p className="text-xs text-blue-600 font-mono bg-blue-50 inline-block px-2 py-1 rounded mb-3">{cat.code}</p>
-            <p className="text-gray-600 text-sm">{cat.deskripsi || 'Tidak ada deskripsi'}</p>
-          </div>
-        ))}
-      </div>
+          )}
 
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
-            <h3 className="text-lg font-bold mb-4">{editingCat ? 'Edit Kategori' : 'Tambah Kategori'}</h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="text-sm font-medium block mb-1">Kode Kategori</label>
-                <input type="text" required value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} className="w-full border p-2 rounded" />
-              </div>
-              <div>
-                <label className="text-sm font-medium block mb-1">Nama Kategori</label>
-                <input type="text" required value={formData.nama} onChange={e => setFormData({...formData, nama: e.target.value})} className="w-full border p-2 rounded" />
-              </div>
-              <div>
-                <label className="text-sm font-medium block mb-1">Deskripsi</label>
-                <textarea value={formData.deskripsi} onChange={e => setFormData({...formData, deskripsi: e.target.value})} className="w-full border p-2 rounded" />
-              </div>
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 border p-2 rounded hover:bg-gray-50">Batal</button>
-                <button type="submit" className="flex-1 bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Simpan</button>
-              </div>
-            </form>
-          </div>
+          {/* PAGINATION CONTROLS */}
+          {filteredProducts.length > 0 && (
+             <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 10px', borderTop: '1px solid #eee' }}>
+                <div style={{ fontSize: '14px', color: '#666' }}>
+                   Menampilkan <b>{indexOfFirstItem + 1} - {Math.min(indexOfLastItem, filteredProducts.length)}</b> dari <b>{filteredProducts.length}</b> barang
+                </div>
+                <div style={{ display: 'flex' }}>
+                   <button className="pagination-btn" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1}>Previous</button>
+                   
+                   {/* Logic simpel buat nampilin max 5 nomor halaman biar gak kepanjangan */}
+                   {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum = currentPage;
+                      if(currentPage <= 3) pageNum = i + 1;
+                      else if(currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+                      else pageNum = currentPage - 2 + i;
+                      
+                      if(pageNum > 0 && pageNum <= totalPages) {
+                          return <button key={pageNum} className={`pagination-btn ${currentPage === pageNum ? 'active' : ''}`} onClick={() => handlePageChange(pageNum)}>{pageNum}</button>;
+                      }
+                      return null;
+                   })}
+                   
+                   <button className="pagination-btn" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages}>Next</button>
+                </div>
+             </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function StockOpnamePage({ currentUser }) {
-  const [products, setProducts] = useState([]);
-  const [opnameData, setOpnameData] = useState({});
-  const [loading, setLoading] = useState(false);
-
-  // Wrap fetchStock in useCallback to prevent re-creation on every render
-  const fetchStock = useCallback(async () => {
-    const { data } = await supabase
-      .from('products')
-      .select('*, stock_live(id, quantity, location_id)')
-      .eq('is_active', true)
-      .order('nama', { ascending: true });
-    
-    const userLocId = currentUser?.location_id;
-    
-    const mapped = data?.map(p => {
-      const stockEntry = userLocId 
-        ? p.stock_live?.find(s => s.location_id === userLocId)
-        : p.stock_live?.[0]; // Fallback to first stock if user has no location (Admin view)
-        
-      return {
-        ...p,
-        current_qty: stockEntry?.quantity || 0,
-        stock_id: stockEntry?.id
-      };
-    });
-
-    setProducts(mapped || []);
-  }, [currentUser]);
-
-  useEffect(() => {
-    fetchStock();
-  }, [fetchStock]);
-
-  const handleInputChange = (id, val) => {
-    setOpnameData({ ...opnameData, [id]: parseInt(val) || 0 });
-  };
-
-  const handleSaveOpname = async () => {
-    if (!window.confirm('Apakah anda yakin ingin menyimpan perubahan stok ini?')) return;
-    setLoading(true);
-
-    try {
-      const updates = Object.keys(opnameData).map(async (productId) => {
-        // Fix: Use strict equality by converting p.id to string or productId to number
-        const product = products.find(p => String(p.id) === productId);
-        const newQty = opnameData[productId];
-        
-        if (product && product.stock_id) {
-          // Update existing stock
-          return supabase.from('stock_live').update({ quantity: newQty }).eq('id', product.stock_id);
-        } else if (product && currentUser?.location_id) {
-          // Insert new stock record if not exists
-          return supabase.from('stock_live').insert({
-            product_id: product.id,
-            location_id: currentUser.location_id,
-            quantity: newQty
-          });
-        }
-      });
-
-      await Promise.all(updates);
-      alert('Stock Opname Berhasil Disimpan!');
-      setOpnameData({});
-      fetchStock();
-    } catch (err) {
-      alert('Gagal menyimpan opname');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6 bg-white p-6 rounded-xl shadow-lg">
-      <div className="flex justify-between items-center border-b pb-4">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">Stock Opname</h2>
-          <p className="text-gray-500 text-sm">Lokasi: <span className="font-semibold text-blue-600">{currentUser?.locations?.nama || 'Global / Admin View'}</span></p>
-        </div>
-        <button 
-          onClick={handleSaveOpname}
-          disabled={loading || Object.keys(opnameData).length === 0}
-          className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg flex items-center gap-2 font-bold transition"
-        >
-          <CheckCircle className="w-5 h-5" />
-          {loading ? 'Menyimpan...' : 'Simpan Perubahan'}
-        </button>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 uppercase text-xs text-gray-500">
-            <tr>
-              <th className="px-4 py-3">Produk</th>
-              <th className="px-4 py-3 text-center">Stok Sistem</th>
-              <th className="px-4 py-3 text-center">Fisik (Input)</th>
-              <th className="px-4 py-3 text-center">Selisih</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {products.map(p => {
-              const fisik = opnameData[p.id] !== undefined ? opnameData[p.id] : p.current_qty;
-              const selisih = fisik - p.current_qty;
-              
-              return (
-                <tr key={p.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3">
-                    <p className="font-bold text-gray-800">{p.nama}</p>
-                    <p className="text-xs text-gray-500">{p.code}</p>
-                  </td>
-                  <td className="px-4 py-3 text-center font-mono text-gray-600">{p.current_qty}</td>
-                  <td className="px-4 py-3 text-center">
-                    <input 
-                      type="number" 
-                      className="w-24 text-center border-2 border-blue-100 focus:border-blue-500 rounded-lg py-1 px-2"
-                      placeholder={p.current_qty}
-                      onChange={(e) => handleInputChange(p.id, e.target.value)}
-                    />
-                  </td>
-                  <td className={`px-4 py-3 text-center font-bold ${selisih < 0 ? 'text-red-500' : selisih > 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                    {selisih > 0 ? `+${selisih}` : selisih}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+export default App;
