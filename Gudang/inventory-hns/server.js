@@ -1,116 +1,191 @@
 const express = require('express');
-const { google } = require('googleapis');
-const fs = require('fs');
-const path = require('path');
+const mysql = require('mysql2/promise'); // Library MySQL modern
 const cors = require('cors');
+const multer = require('multer');
+const csv = require('csv-parser');
+const fs = require('fs');
+const upload = multer({ dest: 'uploads/' });
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Folder Data (Pastikan folder public/data ada)
-const outputDir = path.join(__dirname, 'public', 'data');
-if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
-// --- LOGIKA SINKRONISASI GOOGLE SHEETS ---
-const ID_STOK = '1Adv3Gte2CCs9--Iv16Q30pW6tHrxFykGiAZWSl2P4KY';
-const ID_PRICE = '1OynkBXi2-EImyrIeGT5umPWXbyLNRLGAc-RWiw0pg14'; 
-const KEY_FILE = './service-account.json';
-
-const parseNumber = (val) => {
-    if (typeof val === 'number') return Math.round(val);
-    if (!val) return 0;
-    let clean = val.toString();
-    if (clean.includes(',')) clean = clean.split(',')[0];
-    if (clean.includes('.')) clean = clean.split('.')[0];
-    clean = clean.replace(/\D/g, ''); 
-    return parseInt(clean) || 0;
+// --- 1. KONEKSI DATABASE ---
+// Sesuaikan user/password dengan settingan XAMPP kamu
+const dbConfig = {
+    host: 'localhost',
+    user: 'root',      // Default XAMPP usually 'root'
+    password: '',      // Default XAMPP usually kosong
+    database: 'inventory_hns'
 };
 
-const formatDate = (val) => {
-    if (!val) return '-';
-    if (typeof val === 'number') {
-        const date = new Date(Math.round((val - 25569) * 86400 * 1000));
-        if (!isNaN(date.getTime())) {
-            return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-        }
-    }
-    return String(val);
-};
+// Fungsi bantuan untuk koneksi
+async function query(sql, params) {
+    const connection = await mysql.createConnection(dbConfig);
+    const [results, ] = await connection.execute(sql, params);
+    connection.end(); // Tutup koneksi biar hemat resource
+    return results;
+}
 
-// --- API ENDPOINT BUAT TOMBOL UPDATE ---
-app.get('/api/sync', async (req, res) => {
-    console.log('🔄 Request Sync diterima...');
-    
+// --- 2. API ENDPOINTS ---
+
+// AMBIL SEMUA PRODUK (Cepat!)
+app.get('/api/products', async (req, res) => {
     try {
-        const auth = new google.auth.GoogleAuth({
-            keyFile: KEY_FILE,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-        });
-        const sheets = google.sheets({ version: 'v4', auth });
-
-        // 1. Download USERS
-        const resUsers = await sheets.spreadsheets.values.get({ spreadsheetId: ID_PRICE, range: "'USER_ACCESS'!A2:D" });
-        const users = (resUsers.data.values || []).map(row => ({
-            username: row[0], password: row[1], role: row[2]?.toLowerCase() || 'dealer', name: row[3] || 'User HNS'
-        })).filter(u => u.username && u.password);
-
-        // 2. Download STOK
-        const resStok = await sheets.spreadsheets.values.get({ spreadsheetId: ID_STOK, range: "'Data_Barang'!A2:E", valueRenderOption: 'UNFORMATTED_VALUE' });
-        const mapStok = {};
-        (resStok.data.values || []).forEach(row => { if (row[0]) mapStok[row[0]] = parseNumber(row[3]); });
-
-        // 3. Download HARGA
-        const resPrice = await sheets.spreadsheets.values.get({ spreadsheetId: ID_PRICE, range: "'MASTER_PRICE'!A2:L", valueRenderOption: 'UNFORMATTED_VALUE' });
-        const products = (resPrice.data.values || []).map((row, index) => {
-            const id = row[1];
-            return {
-                id: id || `UNKNOWN-${index}`,
-                nama: row[2] || 'Tanpa Nama',
-                kategori: row[8] || 'Uncategorized',
-                brand: row[9] || '-',
-                harga_beli: parseNumber(row[4]),
-                harga_jual: parseNumber(row[5]),
-                stok: mapStok[id] || 0,
-                last_update: formatDate(row[7])
-            };
-        }).filter(item => item.id && item.id !== 'UNKNOWN');
-
-        // 4. Tulis File
-        fs.writeFileSync(path.join(__dirname, 'public', 'data', 'products.json'), JSON.stringify(products, null, 2));
-        fs.writeFileSync(path.join(__dirname, 'public', 'data', 'users.json'), JSON.stringify(users, null, 2));
+        // Ambil data langsung dari database
+        const rows = await query('SELECT * FROM products ORDER BY nama ASC');
         
-        // Tulis juga ke folder build jika ada (untuk production)
-        const buildDir = path.join(__dirname, 'build', 'data');
-        if (fs.existsSync(path.join(__dirname, 'build'))) {
-            if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir, { recursive: true });
-            fs.writeFileSync(path.join(buildDir, 'products.json'), JSON.stringify(products, null, 2));
-            fs.writeFileSync(path.join(buildDir, 'users.json'), JSON.stringify(users, null, 2));
-        }
-
-        console.log('✅ Sync Berhasil!');
-        res.json({ success: true, message: 'Data berhasil diperbarui!', total: products.length });
-
+        // Format biar sama kayak frontend kamu sebelumnya
+        // Di SQL nama kolomnya 'harga_jual', di frontend mungkin butuh penyesuaian dikit
+        res.json(rows);
     } catch (error) {
-        console.error('❌ Sync Gagal:', error);
+        console.error(error);
+        res.status(500).json({ message: 'Gagal ambil data database' });
+    }
+});
+
+// --- UPDATE PRODUK (REVISI: BISA EDIT SEMUA HARGA) ---
+app.post('/api/update-product', async (req, res) => {
+    try {
+        // Terima data lengkap dari frontend
+        const { kodeBarang, stokBaru, hargaJualBaru, hargaBeliBaru, hargaDealerBaru } = req.body;
+        
+        // Update semua kolom harga dan stok
+        await query(
+            'UPDATE products SET stok = ?, harga_jual = ?, harga_beli = ?, harga_dealer = ? WHERE id = ?',
+            [stokBaru, hargaJualBaru, hargaBeliBaru, hargaDealerBaru, kodeBarang]
+        );
+
+        res.json({ success: true, message: 'Data produk berhasil diupdate!' });
+    } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// --- SERVE REACT APP (UNTUK DEPLOY) ---
-// Kalau folder 'build' ada, server akan menampilkannya
-if (fs.existsSync(path.join(__dirname, 'build'))) {
-    app.use(express.static(path.join(__dirname, 'build')));
-    
-    // 🔥 PERBAIKAN DI SINI: Ganti '*' jadi /(.*)/ biar gak error
-    app.get(/(.*)/, (req, res) => {
-        res.sendFile(path.join(__dirname, 'build', 'index.html'));
-    });
-}
+// AMBIL DATA USER (LOGIN)
+app.get('/api/users', async (req, res) => {
+    try {
+        const users = await query('SELECT username, password, role FROM users');
+        // Tambahkan properti 'name' biar frontend gak error
+        const formattedUsers = users.map(u => ({ ...u, name: u.username.toUpperCase() }));
+        res.json(formattedUsers);
+    } catch (error) {
+        res.status(500).json([]);
+    }
+});
 
+// SYNC (OPSIONAL)
+// Karena pakai database, sync sebenernya gak perlu. 
+// Tapi biar frontend gak error pas klik tombol sync, kita kasih respon dummy sukses.
+app.get('/api/sync', (req, res) => {
+    res.json({ success: true, message: 'Database sudah realtime! Tidak perlu sync manual.', total: 0 });
+});
+
+// --- JALANKAN SERVER ---
 app.listen(PORT, () => {
-    console.log(`🚀 Server berjalan di port ${PORT}`);
+    console.log(`🚀 Server Database MySQL berjalan di http://localhost:${PORT}`);
+});
+
+// --- TAMBAHAN FITUR CRUD (CREATE & DELETE) ---
+
+// 1. TAMBAH BARANG BARU (CREATE)
+app.post('/api/add-product', async (req, res) => {
+    try {
+        // Ambil data dari frontend
+        const { id, nama, kategori, brand, harga_beli, harga_dealer, harga_jual, stok } = req.body;
+        
+        // Cek dulu, kode barang sudah ada belum?
+        const check = await query('SELECT id FROM products WHERE id = ?', [id]);
+        if(check.length > 0) {
+            return res.status(400).json({ success: false, message: 'Kode Barang sudah terpakai!' });
+        }
+
+        // Masukkan ke database
+        await query(
+            'INSERT INTO products (id, nama, kategori, brand, harga_beli, harga_dealer, harga_jual, stok) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, nama, kategori, brand, harga_beli, harga_dealer, harga_jual, stok]
+        );
+        res.json({ success: true, message: 'Barang berhasil ditambah!' });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Gagal menambah barang: ' + error.message });
+    }
+});
+
+// 2. HAPUS BARANG (DELETE)
+app.delete('/api/delete-product/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await query('DELETE FROM products WHERE id = ?', [id]);
+        res.json({ success: true, message: 'Barang berhasil dihapus!' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// --- API IMPORT CSV ---
+app.post('/api/import', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ success: false, message: 'File wajib diupload!' });
+
+        const results = [];
+        
+        fs.createReadStream(req.file.path)
+            .pipe(csv())
+            .on('data', (data) => {
+                // FUNGSI BERSIH-BERSIH HARGA (Hapus Rp, Titik, Koma)
+                const cleanPrice = (val) => {
+                    if(!val) return 0;
+                    // Hapus Rp, hapus titik, hapus ,00
+                    return parseInt(val.toString().replace(/Rp/g, '').replace(/\./g, '').replace(/,00/g, '').replace(/,/g, '')) || 0;
+                };
+
+                // MAPPING SESUAI HEADER CSV KAMU
+                const id = data['Kode Accurate'] || data['Kode'] || ''; 
+                const nama = data['NAMA BARANG'] || data['Nama'] || '';
+
+                // Hanya ambil data yang punya Kode Barang
+                if (id && id !== 'nan') {
+                    results.push([
+                        id,
+                        nama,
+                        data['KATEGORI'] || '',
+                        data['NAMA BRAND'] || '',
+                        cleanPrice(data['CP']),         // Harga Beli
+                        cleanPrice(data['SP']),         // Harga Dealer
+                        cleanPrice(data['PRICE']),      // Harga Jual
+                        cleanPrice(data['Stok Sistem']) // Stok
+                    ]);
+                }
+            })
+            .on('end', async () => {
+                fs.unlinkSync(req.file.path); // Hapus file temporary
+
+                if (results.length > 0) {
+                    try {
+                        // INSERT BULK (Banyak sekaligus) + UPDATE kalau sudah ada
+                        const sql = `INSERT INTO products (id, nama, kategori, brand, harga_beli, harga_dealer, harga_jual, stok) VALUES ? 
+                                     ON DUPLICATE KEY UPDATE 
+                                     nama=VALUES(nama), kategori=VALUES(kategori), brand=VALUES(brand), 
+                                     harga_beli=VALUES(harga_beli), harga_dealer=VALUES(harga_dealer), 
+                                     harga_jual=VALUES(harga_jual), stok=VALUES(stok)`;
+                        
+                        const connection = await mysql.createConnection(dbConfig);
+                        await connection.query(sql, [results]);
+                        connection.end();
+
+                        res.json({ success: true, message: `Sukses import ${results.length} barang!` });
+                    } catch (err) {
+                        res.status(500).json({ success: false, message: 'Gagal insert database: ' + err.message });
+                    }
+                } else {
+                    res.json({ success: false, message: 'File CSV kosong atau format salah.' });
+                }
+            });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
