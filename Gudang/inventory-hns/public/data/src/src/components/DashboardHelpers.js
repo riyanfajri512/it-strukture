@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from 'react';
 
 // ==================== STYLES PATEN (LAPTOP & MOBILE) ====================
 export const styles = `
@@ -120,103 +120,69 @@ export const styles = `
 
 // ==================== MULTI SELECT COMPONENT ====================
 export function MultiSelect({ label, options, selected, onChange }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const wrapperRef = useRef(null);
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState("");
+    const wrapperRef = useRef(null);
 
-  const filteredOptions = options.filter((opt) =>
-    opt.toLowerCase().includes(searchTerm.toLowerCase()),
-  );
+    const filteredOptions = options.filter(opt => 
+        opt.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-        setIsOpen(false);
-        setSearchTerm("");
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    useEffect(() => {
+        function handleClickOutside(event) {
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+                setIsOpen(false);
+                setSearchTerm("");
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
-  const toggleOption = (option) => {
-    if (selected.includes(option)) {
-      onChange(selected.filter((item) => item !== option));
-    } else {
-      onChange([...selected, option]);
-    }
-  };
+    const toggleOption = (option) => {
+        if (selected.includes(option)) {
+            onChange(selected.filter(item => item !== option));
+        } else {
+            onChange([...selected, option]);
+        }
+    };
 
-  return (
-    <div className="filter-group" ref={wrapperRef}>
-      <label className="filter-label">{label}</label>
-      <div className="multiselect-wrapper">
-        <div className="multiselect-display" onClick={() => setIsOpen(!isOpen)}>
-          <span style={{ color: selected.length === 0 ? "#a0aec0" : "#000" }}>
-            {selected.length === 0
-              ? `Pilih ${label}...`
-              : `${selected.length} dipilih`}
-          </span>
-          <span>{isOpen ? "▲" : "▼"}</span>
-        </div>
-
-        {isOpen && (
-          <div className="multiselect-dropdown">
-            <div
-              style={{
-                padding: "8px",
-                borderBottom: "1px solid #eee",
-                position: "sticky",
-                top: 0,
-                background: "white",
-              }}
-            >
-              <input
-                type="text"
-                placeholder={`Cari ${label}...`}
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "6px",
-                  fontSize: "12px",
-                  border: "1px solid #ddd",
-                  borderRadius: "4px",
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-            </div>
-            <div style={{ maxHeight: "160px", overflowY: "auto" }}>
-              {filteredOptions.length > 0 ? (
-                filteredOptions.map((option) => (
-                  <div
-                    key={option}
-                    className="multiselect-option"
-                    onClick={() => toggleOption(option)}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(option)}
-                      readOnly
-                    />
-                    <span>{option}</span>
-                  </div>
-                ))
-              ) : (
-                <div
-                  style={{ padding: "10px", fontSize: "12px", color: "#999" }}
-                >
-                  Tidak ditemukan
+    return (
+        <div className="filter-group" ref={wrapperRef}>
+            <label className="filter-label">{label}</label>
+            <div className="multiselect-wrapper">
+                <div className="multiselect-display" onClick={() => setIsOpen(!isOpen)}>
+                    <span style={{ color: selected.length === 0 ? '#a0aec0' : '#000' }}>
+                        {selected.length === 0 ? `Pilih ${label}...` : `${selected.length} dipilih`}
+                    </span>
+                    <span>{isOpen ? '▲' : '▼'}</span>
                 </div>
-              )}
+
+                {isOpen && (
+                    <div className="multiselect-dropdown">
+                        <div style={{ padding: '8px', borderBottom: '1px solid #eee', position: 'sticky', top: 0, background: 'white' }}>
+                            <input 
+                                type="text" 
+                                placeholder={`Cari ${label}...`} 
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                style={{ width: '100%', padding: '6px', fontSize: '12px', border: '1px solid #ddd', borderRadius: '4px' }}
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        </div>
+                        <div style={{ maxHeight: '160px', overflowY: 'auto' }}>
+                            {filteredOptions.length > 0 ? filteredOptions.map(option => (
+                                <div key={option} className="multiselect-option" onClick={() => toggleOption(option)}>
+                                    <input type="checkbox" checked={selected.includes(option)} readOnly />
+                                    <span>{option}</span>
+                                </div>
+                            )) : <div style={{padding:'10px', fontSize:'12px', color:'#999'}}>Tidak ditemukan</div>}
+                        </div>
+                    </div>
+                )}
             </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+        </div>
+    );
 }
 
-// ==================== DEFAULT EXPORT ====================
-const DashboardHelpers = { styles, MultiSelect };
-export default DashboardHelpers;
+export default { styles, MultiSelect };
